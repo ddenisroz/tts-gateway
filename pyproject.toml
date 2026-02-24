@@ -1,0 +1,20 @@
+[project]
+name = "tts-gateway"
+version = "0.1.0"
+description = "Scheduler-first TTS orchestrator for F5 and Qwen providers."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi==0.116.1",
+    "uvicorn[standard]==0.35.0",
+    "httpx==0.28.1",
+    "redis[hiredis]==6.4.0",
+    "pydantic-settings==2.11.0",
+    "python-multipart==0.0.20",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest==8.4.1",
+]
+
