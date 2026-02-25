@@ -9,18 +9,20 @@ Provider = Literal["f5", "qwen"]
 
 
 class SynthesizeChannelRequest(BaseModel):
-    channel_name: str
-    text: str
-    author: str = "unknown"
+    channel_name: str = Field(..., min_length=1, max_length=120)
+    text: str = Field(..., min_length=1, max_length=10000)
+    author: str = Field(default="unknown", max_length=120)
     user_id: int | None = None
     volume_level: float = Field(default=50.0, ge=0.0, le=100.0)
     tts_settings: dict[str, Any] = Field(default_factory=dict)
     word_filter: list[str] = Field(default_factory=list)
     blocked_users: list[str] = Field(default_factory=list)
     provider: Provider | None = None
-    voice: str | None = None
+    voice: str | None = Field(default=None, max_length=120)
     voice_map: dict[str, str] | None = None
-    tenant_id: str | None = None
+    tenant_id: str | None = Field(default=None, max_length=200)
+    request_id: str | None = Field(default=None, max_length=200)
+    async_mode: bool = False
 
     def resolve_provider(self) -> Provider:
         if self.provider in {"f5", "qwen"}:
@@ -51,6 +53,24 @@ class SynthesizeChannelRequest(BaseModel):
             return f"user:{self.user_id}"
         return "tenant:default"
 
+    def resolve_idempotency_key(self, provider: Provider) -> str | None:
+        candidates = [
+            self.request_id,
+            self.tts_settings.get("request_id"),
+            self.tts_settings.get("message_id"),
+            self.tts_settings.get("event_id"),
+        ]
+        chosen = ""
+        for candidate in candidates:
+            value = str(candidate or "").strip()
+            if value:
+                chosen = value
+                break
+        if not chosen:
+            return None
+        tenant = self.resolve_tenant()
+        return f"{provider}:{tenant}:{chosen}"
+
 
 class JobEnvelope(BaseModel):
     job_id: str
@@ -79,4 +99,3 @@ class HealthResponse(BaseModel):
     service: str
     redis: str | None = None
     scheduler: str | None = None
-

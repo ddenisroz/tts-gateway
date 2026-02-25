@@ -26,6 +26,7 @@ class QwenAdapter(ProviderAdapter):
         url_policy: str,
         gateway_public_base_url: str,
         audio_store: AudioStore,
+        max_proxy_audio_bytes: int,
     ) -> None:
         super().__init__(timeout_sec=timeout_sec, retry_budget=retry_budget)
         self.base_url = base_url.rstrip("/")
@@ -33,6 +34,7 @@ class QwenAdapter(ProviderAdapter):
         self.url_policy = (url_policy or "auto").strip().lower()
         self.gateway_public_base_url = gateway_public_base_url.rstrip("/")
         self.audio_store = audio_store
+        self.max_proxy_audio_bytes = max(1_000_000, int(max_proxy_audio_bytes))
 
     async def synthesize(self, job: JobEnvelope) -> NormalizedSynthesizeResponse:
         headers = {}
@@ -94,18 +96,31 @@ class QwenAdapter(ProviderAdapter):
 
         # Proxy fallback: download audio in-gateway and return gateway URL.
         try:
-            response = await self.client.get(
-                stream_url,
-                headers=headers,
-                timeout=httpx.Timeout(max(self.timeout_sec * 3, 90.0), connect=min(5.0, self.timeout_sec)),
-            )
-            if response.status_code != 200:
+            timeout = httpx.Timeout(max(self.timeout_sec * 3, 90.0), connect=min(5.0, self.timeout_sec))
+            audio_bytes = bytearray()
+            content_type = ""
+            async with self.client.stream("GET", stream_url, headers=headers, timeout=timeout) as response:
+                if response.status_code != 200:
+                    await self._cancel(stream_id, headers)
+                    return self._failed(job, f"qwen stream status={response.status_code}")
+                content_type = str(response.headers.get("content-type") or "")
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
+                    audio_bytes.extend(chunk)
+                    if len(audio_bytes) > self.max_proxy_audio_bytes:
+                        await self._cancel(stream_id, headers)
+                        return self._failed(job, f"qwen stream too large ({self.max_proxy_audio_bytes} bytes limit)")
+            if not audio_bytes:
                 await self._cancel(stream_id, headers)
-                return self._failed(job, f"qwen stream status={response.status_code}")
-
-            audio_bytes = response.content
-            filename = self.audio_store.save_bytes(audio_bytes, suffix=".wav")
-            duration = _wav_duration_or_none(audio_bytes)
+                return self._failed(job, "qwen stream is empty")
+            payload = bytes(audio_bytes)
+            suffix = _detect_audio_suffix(content_type, payload)
+            if suffix is None:
+                await self._cancel(stream_id, headers)
+                return self._failed(job, "qwen stream payload is not recognized as audio")
+            filename = self.audio_store.save_bytes(payload, suffix=suffix)
+            duration = _audio_duration_or_none(payload, suffix)
             return NormalizedSynthesizeResponse(
                 success=True,
                 audio_url=f"{self.gateway_public_base_url}/api/tts/audio/{filename}",
@@ -152,6 +167,54 @@ def _wav_duration_or_none(payload: bytes) -> float | None:
         return None
 
 
+def _audio_duration_or_none(payload: bytes, suffix: str) -> float | None:
+    normalized = str(suffix or "").strip().lower()
+    if normalized != ".wav":
+        return None
+    return _wav_duration_or_none(payload)
+
+
+def _detect_audio_suffix(content_type: str, payload: bytes) -> str | None:
+    ct = str(content_type or "").lower()
+    if "audio/wav" in ct or "audio/x-wav" in ct or "audio/wave" in ct:
+        return ".wav"
+    if "audio/mpeg" in ct or "audio/mp3" in ct:
+        return ".mp3"
+    if "audio/ogg" in ct:
+        return ".ogg"
+    if "audio/flac" in ct:
+        return ".flac"
+    if "audio/aac" in ct:
+        return ".aac"
+    if "audio/mp4" in ct or "audio/x-m4a" in ct:
+        return ".m4a"
+    if "audio/aiff" in ct:
+        return ".aiff"
+    if "audio/basic" in ct:
+        return ".au"
+    if "audio/x-ms-wma" in ct:
+        return ".wma"
+
+    header = payload[:16]
+    if len(header) >= 12 and header.startswith(b"RIFF") and header[8:12] == b"WAVE":
+        return ".wav"
+    if header.startswith(b"ID3") or (len(header) > 1 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
+        return ".mp3"
+    if header.startswith(b"OggS"):
+        return ".ogg"
+    if header.startswith(b"fLaC"):
+        return ".flac"
+    if len(header) >= 8 and header[4:8] == b"ftyp":
+        return ".m4a"
+    if header.startswith(bytes.fromhex("3026B2758E66CF11")):
+        return ".wma"
+    if header.startswith(b"FORM") and len(header) >= 12 and header[8:12] in {b"AIFF", b"AIFC"}:
+        return ".aiff"
+    if header.startswith(b".snd"):
+        return ".au"
+    return None
+
+
 def _looks_publicly_reachable(url: str) -> bool:
     parsed = urlparse(url)
     host = (parsed.hostname or "").strip().lower()
@@ -163,4 +226,3 @@ def _looks_publicly_reachable(url: str) -> bool:
         # hostname (DNS) - assume externally reachable
         return True
     return not (ip.is_loopback or ip.is_private or ip.is_link_local)
-

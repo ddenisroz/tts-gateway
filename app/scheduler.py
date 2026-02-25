@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
+from time import time
 
 from .adapters.base import ProviderAdapter
 from .circuit_breaker import CircuitBreaker
@@ -119,3 +120,22 @@ class Scheduler:
             async with self._lock:
                 self.in_flight[provider] = max(0, self.in_flight[provider] - 1)
 
+    def get_runtime_snapshot(self) -> dict[str, object]:
+        now = time()
+        circuits: dict[str, dict[str, object]] = {}
+        for provider, circuit in self.circuits.items():
+            opened = circuit.is_open()
+            opened_for = 0.0
+            if circuit.opened_at is not None:
+                opened_for = max(0.0, now - circuit.opened_at)
+            circuits[provider] = {
+                "is_open": opened,
+                "failures": circuit.failures,
+                "opened_for_sec": round(opened_for, 3),
+            }
+        return {
+            "running": self.running,
+            "in_flight": dict(self.in_flight),
+            "lane_limits": dict(self.lane_limits),
+            "circuits": circuits,
+        }
