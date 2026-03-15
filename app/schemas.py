@@ -42,7 +42,7 @@ class SynthesizeChannelRequest(BaseModel):
             if fallback:
                 return fallback
         fallback = str(self.tts_settings.get("voice", "")).strip()
-        return fallback or ("default" if provider == "qwen" else "female_1")
+        return fallback or ("default" if provider == "qwen" else "default_voice")
 
     def resolve_tenant(self) -> str:
         if self.tenant_id and self.tenant_id.strip():

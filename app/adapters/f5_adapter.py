@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from urllib.parse import urlparse
 
 from ..schemas import JobEnvelope, NormalizedSynthesizeResponse
+from ..storage.audio_store import AudioStore
 from .base import ProviderAdapter, absolutize_audio_url
 
 logger = logging.getLogger(__name__)
@@ -29,15 +32,20 @@ class F5Adapter(ProviderAdapter):
         api_key: str,
         timeout_sec: float,
         retry_budget: int,
+        gateway_public_base_url: str,
+        audio_store: AudioStore,
     ) -> None:
         super().__init__(timeout_sec=timeout_sec, retry_budget=retry_budget)
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key.strip()
+        self.gateway_public_base_url = gateway_public_base_url.rstrip("/")
+        self.audio_store = audio_store
 
     async def synthesize(self, job: JobEnvelope) -> NormalizedSynthesizeResponse:
         headers = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+            headers["X-API-Key"] = self.api_key
 
         settings = job.payload.tts_settings if isinstance(job.payload.tts_settings, dict) else {}
         voice_settings = settings.get("voice_settings", {}) if isinstance(settings.get("voice_settings"), dict) else {}
@@ -54,12 +62,16 @@ class F5Adapter(ProviderAdapter):
             "user_id": job.payload.user_id,
             "volume_level": job.payload.volume_level,
             "format": "wav",
+            "request_id": job.payload.request_id,
+            "event_id": str(settings.get("event_id") or settings.get("source_message_id") or "") or None,
             "cfg_strength": cfg_strength,
             "speed_preset": speed_preset,
             "remove_silence": remove_silence,
             "metadata": {
                 "gateway_job_id": job.job_id,
                 "gateway_provider": "f5",
+                "request_id": job.payload.request_id,
+                "event_id": str(settings.get("event_id") or settings.get("source_message_id") or "") or None,
                 "cfg_strength": cfg_strength,
                 "speed_preset": speed_preset,
                 "remove_silence": remove_silence,
@@ -79,10 +91,25 @@ class F5Adapter(ProviderAdapter):
                 if not data.get("success"):
                     last_error = str(data.get("error") or "f5 returned success=false")
                     continue
-                audio_url = absolutize_audio_url(self.base_url, data.get("audio_url"))
+                upstream_audio_url = absolutize_audio_url(self.base_url, data.get("audio_url"))
+                if not upstream_audio_url:
+                    last_error = "f5 missing audio_url"
+                    continue
+                audio_response = await self.client.get(upstream_audio_url, headers=headers)
+                if audio_response.status_code != 200:
+                    last_error = f"f5 audio status={audio_response.status_code}"
+                    continue
+                audio_bytes = audio_response.content
+                if not audio_bytes:
+                    last_error = "f5 audio payload is empty"
+                    continue
+                suffix = Path(urlparse(upstream_audio_url).path).suffix.lower()
+                if suffix not in {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".aiff", ".au", ".wma"}:
+                    suffix = ".wav"
+                filename = self.audio_store.save_bytes(audio_bytes, suffix=suffix)
                 return NormalizedSynthesizeResponse(
                     success=True,
-                    audio_url=audio_url,
+                    audio_url=f"{self.gateway_public_base_url}/api/tts/audio/{filename}",
                     selected_voice=data.get("selected_voice") or data.get("voice") or job.voice,
                     voice=data.get("voice") or data.get("selected_voice") or job.voice,
                     tts_type="ai_f5",

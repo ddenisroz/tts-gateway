@@ -23,6 +23,31 @@ logger = logging.getLogger("tts-gateway")
 JOB_ID_RE = re.compile(r"^[0-9a-f]{16,64}$")
 
 
+async def _runtime_health_payload() -> dict[str, str]:
+    redis_ok = await app.state.store.ping()
+    scheduler_ok = bool(app.state.scheduler.running)
+    return {
+        "status": "ok" if redis_ok and scheduler_ok else "degraded",
+        "service": "tts-gateway",
+        "redis": "ok" if redis_ok else "down",
+        "scheduler": "running" if scheduler_ok else "stopped",
+    }
+
+
+async def _require_runtime_ready() -> None:
+    health = await _runtime_health_payload()
+    if health["status"] != "ok":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "gateway_runtime_unavailable",
+                "message": "tts-gateway is not ready to process synthesis requests.",
+                "redis": health["redis"],
+                "scheduler": health["scheduler"],
+            },
+        )
+
+
 def _result_to_payload(result: NormalizedSynthesizeResponse) -> dict[str, object | None]:
     return {
         "success": result.success,
@@ -91,6 +116,8 @@ async def lifespan(app: FastAPI):
         api_key=settings.f5_api_key,
         timeout_sec=settings.request_timeout_sec,
         retry_budget=settings.provider_retry_budget,
+        gateway_public_base_url=settings.public_base_url,
+        audio_store=audio_store,
     )
     qwen_adapter = QwenAdapter(
         base_url=settings.qwen_url,
@@ -140,23 +167,23 @@ async def health_live() -> HealthResponse:
 
 @app.get("/health/ready", response_model=HealthResponse)
 async def health_ready() -> HealthResponse:
-    redis_ok = await app.state.store.ping()
-    scheduler_ok = bool(app.state.scheduler.running)
-    return HealthResponse(
-        status="ok" if redis_ok and scheduler_ok else "degraded",
-        service="tts-gateway",
-        redis="ok" if redis_ok else "down",
-        scheduler="running" if scheduler_ok else "stopped",
-    )
+    return HealthResponse(**await _runtime_health_payload())
 
 
 @app.get("/health")
 async def health_alias() -> dict[str, str]:
-    return {"status": "healthy", "service": "tts-gateway"}
+    health = await _runtime_health_payload()
+    return {
+        "status": "healthy" if health["status"] == "ok" else "degraded",
+        "service": "tts-gateway",
+        "redis": health["redis"],
+        "scheduler": health["scheduler"],
+    }
 
 
 @app.post("/api/tts/synthesize-channel", dependencies=[Depends(verify_api_key)])
 async def synthesize_channel(payload: SynthesizeChannelRequest):
+    await _require_runtime_ready()
     app.state.metrics.inc_total()
     provider = payload.resolve_provider()
     max_len = max(1, int(app.state.settings.max_input_text_length))
@@ -327,6 +354,7 @@ async def get_job_result(job_id: str):
 
 @app.get("/api/admin/stats", dependencies=[Depends(verify_api_key)])
 async def admin_stats():
+    await _require_runtime_ready()
     queue_depths = await app.state.store.queue_depths()
     job_state_counts = await app.state.store.job_state_counts()
     scheduler = app.state.scheduler.get_runtime_snapshot()

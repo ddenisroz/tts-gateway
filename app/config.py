@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     f5_url: str = Field("http://localhost:8011", alias="TTS_GATEWAY_F5_URL")
     f5_api_key: str = Field("", alias="TTS_GATEWAY_F5_API_KEY")
-    qwen_url: str = Field("http://localhost:8000", alias="TTS_GATEWAY_QWEN_URL")
+    qwen_url: str = Field("http://localhost:8012", alias="TTS_GATEWAY_QWEN_URL")
     qwen_api_key: str = Field("", alias="TTS_GATEWAY_QWEN_API_KEY")
     qwen_url_policy: str = Field("auto", alias="TTS_GATEWAY_QWEN_URL_POLICY")
     qwen_proxy_max_audio_bytes: int = Field(25_000_000, alias="TTS_GATEWAY_QWEN_PROXY_MAX_AUDIO_BYTES")

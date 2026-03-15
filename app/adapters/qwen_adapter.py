@@ -53,6 +53,8 @@ class QwenAdapter(ProviderAdapter):
             "channel_name": job.payload.channel_name,
             "author": job.payload.author,
             "user_id": str(job.payload.user_id or ""),
+            "request_id": str(job.payload.request_id or ""),
+            "event_id": str(settings.get("event_id") or settings.get("source_message_id") or ""),
         }
 
         prepare_url = f"{self.base_url}/api/prepare"
