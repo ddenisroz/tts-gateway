@@ -45,6 +45,8 @@ uv sync
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8010
 ```
 
+`.env.example` intentionally contains only the core runtime wiring. Advanced scheduling/timeouts/concurrency overrides still exist in `app/config.py` and should be added to `.env` only when you actually need to change the defaults.
+
 ## Quick Checks
 
 ```bash
