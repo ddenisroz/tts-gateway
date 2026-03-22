@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-import shutil
-
 import httpx
 import pytest
 
@@ -12,10 +9,7 @@ from app.storage.audio_store import AudioStore
 
 
 @pytest.mark.asyncio
-async def test_f5_adapter_proxies_provider_audio_to_gateway_storage():
-    tmp_path = Path.cwd() / "tmp" / "gateway_f5_adapter_test"
-    shutil.rmtree(tmp_path, ignore_errors=True)
-    tmp_path.mkdir(parents=True, exist_ok=True)
+async def test_f5_adapter_proxies_provider_audio_to_gateway_storage(tmp_path):
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/v1/synthesize":

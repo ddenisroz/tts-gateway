@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+.pytest_tmp/
+.tmp/
+.uv-cache/
 data/audio/*
 !data/audio/.gitkeep
 .env
