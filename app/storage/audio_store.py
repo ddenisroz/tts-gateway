@@ -19,10 +19,18 @@ class AudioStore:
         try:
             with os.fdopen(tmp_fd, "wb") as handle:
                 handle.write(payload)
-            os.replace(tmp_name, path)
+            try:
+                os.replace(tmp_name, path)
+            except PermissionError:
+                # Windows file watchers / sandboxed directories can block atomic replace
+                # even though writing the final file directly is allowed.
+                path.write_bytes(payload)
         finally:
             if os.path.exists(tmp_name):
-                os.remove(tmp_name)
+                try:
+                    os.remove(tmp_name)
+                except PermissionError:
+                    pass
         return filename
 
     def resolve_path(self, filename: str) -> Path:

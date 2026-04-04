@@ -1,42 +1,38 @@
-# tts-gateway
+﻿# tts-gateway
 
-Scheduler-first orchestrator for TTS providers.
+Shared cloud TTS orchestrator for Paidviewer.
 
-## Docs
+## Production role
 
-- Bot integration contract: `docs/BOT_SERVICE_EXTERNAL_INTEGRATION.md`
+`tts-gateway` is the only official cloud synth entry for both `f5` and `qwen`.
 
-## Goals
+Runtime path:
 
-- public bot contract compatibility:
-  - `POST /api/tts/synthesize-channel`
-  - `GET /api/tts/jobs/{job_id}` (optional async polling)
-  - `GET /health/live`
-  - `GET /health/ready`
-  - `GET /api/admin/stats`
-- adapters:
-  - `F5Adapter` -> `f5-tts-service /v1/synthesize`
-  - `QwenAdapter` -> `nano-qwen3tts-vllm` (`/api/prepare + /api/stream/{id}`)
-- fairness:
-  - Redis hot path
-  - WFQ + aging scheduling
-  - provider execution lanes (scheduler-first, no classic worker pool)
-- speed-first defaults:
-  - persistent HTTP clients
-  - strict timeouts + retry budget
-  - fast-fail + circuit breaker
-  - Qwen URL policy `auto` (passthrough-first, proxy fallback)
-  - idempotency support for retries (`request_id`/`message_id`/`event_id`)
+`bot_service -> tts-gateway -> provider runtime`
 
-## Notes
+## Required public endpoints
 
-- All relative paths are resolved from `TTS_GATEWAY_BASE_DIR` (default `.`).
-- `GET /api/admin/stats` exposes queue depth, job states, scheduler/circuit runtime snapshot, and request metrics.
-- `TTS_GATEWAY_IDEMPOTENCY_TTL_SEC` is clamped to result TTL (`TTS_GATEWAY_RESULT_TIMEOUT_SEC + 30`) to avoid stale dedup keys.
-- Auth is strict API key only (`TTS_GATEWAY_API_KEYS`), no JWT/no-anon mode.
-- Proxy mode for Qwen limits buffered audio size via `TTS_GATEWAY_QWEN_PROXY_MAX_AUDIO_BYTES`.
-- Text input is guarded by `TTS_GATEWAY_MAX_INPUT_TEXT_LENGTH`.
-- Optional tenant rate limit is configured via `TTS_GATEWAY_TENANT_RATE_LIMIT_PER_MINUTE` (`0` disables).
+- `POST /api/tts/synthesize-channel`
+- `GET /health/live`
+- `GET /health/ready`
+- `GET /api/admin/stats`
+- `GET /api/tts/jobs/{job_id}` for async polling
+
+## Paidviewer contract
+
+- strict API-key auth only
+- no user settings stored in gateway
+- gateway returns the playback-safe `audio_url`
+- gateway is responsible for queueing, fairness, and provider runtime calls
+
+## Required env
+
+- `TTS_GATEWAY_API_KEYS`
+- `TTS_GATEWAY_REDIS_URL`
+- `TTS_GATEWAY_F5_URL`
+- `TTS_GATEWAY_F5_API_KEY`
+- `TTS_GATEWAY_QWEN_URL`
+- `TTS_GATEWAY_QWEN_API_KEY`
 
 ## Run
 
@@ -45,11 +41,15 @@ uv sync
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8010
 ```
 
-`.env.example` intentionally contains only the core runtime wiring. Advanced scheduling/timeouts/concurrency overrides still exist in `app/config.py` and should be added to `.env` only when you actually need to change the defaults.
-
-## Quick Checks
+## Quick checks
 
 ```bash
-python scripts/load_test.py --url http://localhost:8010/api/tts/synthesize-channel
-python scripts/fairness_probe.py --url http://localhost:8010/api/tts/synthesize-channel
+curl http://127.0.0.1:8010/health/live
+curl http://127.0.0.1:8010/health/ready
 ```
+
+## Notes
+
+- Redis is mandatory.
+- `tts-gateway` is cloud-only. It is not the self-host runtime path.
+- The detailed bot-service contract is documented in `docs/BOT_SERVICE_EXTERNAL_INTEGRATION.md`.
