@@ -1,40 +1,50 @@
 ﻿# Bot Service External Integration
 
-This document fixes the active integration contract between `paidviewer_tools/bot_service` and `tts-gateway`.
+Этот документ нужен не обычному пользователю, а тому, кто запускает `tts-gateway` вместе с Paidviewer.
 
-## Role
+Если ты просто поднимаешь весь продукт, начни с `paidviewer_tools/docs/QUICKSTART.md` в основном репозитории.
 
-`tts-gateway` is the shared cloud orchestrator for both `f5` and `qwen`.
+## Что это за сервис
 
-It is the only official cloud synth path:
+`tts-gateway` — это общий cloud-оркестратор для `f5` и `qwen`.
 
-`bot_service -> tts-gateway -> provider runtime`
+Официальный cloud-путь только один:
 
-Self-host traffic must not be routed here as the primary self-host contract.
+```text
+bot_service -> tts-gateway -> provider runtime
+```
 
-## Required endpoints
+Self-host трафик не должен идти сюда как основной сценарий.
+
+## Что `tts-gateway` обязан уметь
+
+- принимать запрос на synth
+- проверять свою готовность
+- держать очередь и fair scheduling
+- вызывать нужный provider runtime
+- возвращать `audio_url`, который можно безопасно отдать дальше в продукт
+
+## Обязательные endpoints
 
 - `POST /api/tts/synthesize-channel`
 - `GET /health/live`
 - `GET /health/ready`
 - `GET /api/admin/stats`
-- `GET /api/tts/jobs/{job_id}` for async polling
+- `GET /api/tts/jobs/{job_id}`
 
-## Auth
+## Авторизация
 
-Gateway accepts strict API-key auth:
+Используется строгий API-key контракт:
 
 - `Authorization: Bearer <key>`
 - `X-API-Key: <key>`
 
-Invalid key contract:
+Если ключ неверный, ожидаем:
 
 - `401`
 - `{"detail":"Invalid API key"}`
 
-## Request contract
-
-Minimal request:
+## Минимальный запрос
 
 ```json
 {
@@ -44,7 +54,7 @@ Minimal request:
 }
 ```
 
-Expected production request fields from `bot_service` include:
+В реальном проде `bot_service` обычно добавляет ещё:
 
 - `provider`
 - `request_id`
@@ -52,11 +62,8 @@ Expected production request fields from `bot_service` include:
 - `tts_settings`
 - `voice_map`
 - `user_id`
-- `author`
 
-## Response contract
-
-Normalized success response:
+## Успешный ответ
 
 ```json
 {
@@ -71,44 +78,16 @@ Normalized success response:
 }
 ```
 
-Async response:
+## Что важно в эксплуатации
 
-```json
-{
-  "success": true,
-  "queued": true,
-  "job_id": "4f2d2c0e0e244d57a3f2e1b4dd7ab8b6",
-  "status": "queued",
-  "audio_url": null,
-  "provider": "f5"
-}
-```
+- `bot_service` остаётся источником истины по настройкам и маршрутизации
+- `tts-gateway` отвечает только за cloud-оркестрацию
+- `audio_url` из ответа — это тот URL, который должен использовать runtime потребитель
+- Redis для `tts-gateway` обязателен
 
-## Operational rules
+## Минимальный cutover smoke
 
-- Gateway owns fairness, queueing, and provider runtime calls.
-- `bot_service` remains the source of truth for user settings and routing policy.
-- `bot_service` should use the returned gateway `audio_url` for playback.
-- `request_id` / `event_id` should be forwarded for idempotency and tracing.
-
-## Startup checks from `bot_service`
-
-Before sending traffic:
-
-1. `GET /health/live`
-2. `GET /health/ready`
-3. stop routing if `ready != ok`
-
-## Required env in `bot_service`
-
-- `TTS_GATEWAY_URL=http://tts-gateway:8010`
-- `TTS_GATEWAY_API_KEY=...`
-- `TTS_GATEWAY_TIMEOUT_SEC=40`
-- `TTS_GATEWAY_RETRY_COUNT=1`
-
-## Cutover smoke
-
-1. `provider=f5` synth works.
-2. `provider=qwen` synth works.
-3. async synth + polling works.
-4. returned `audio_url` is playable from the runtime that consumes it.
+1. synth с `provider=f5` работает
+2. synth с `provider=qwen` работает
+3. async synth + polling работает
+4. полученный `audio_url` реально воспроизводим

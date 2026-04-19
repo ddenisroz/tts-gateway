@@ -3,7 +3,7 @@ name = "tts-gateway"
 version = "0.1.0"
 description = "Scheduler-first TTS orchestrator for F5 and Qwen providers."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.116.1",
     "uvicorn[standard]==0.35.0",
